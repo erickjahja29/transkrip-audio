@@ -115,6 +115,9 @@
 
   /* bilah audio */
   #dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: rgba(255,255,255,.96); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border-top: 1px solid var(--line); }
+  #jump { position: fixed; right: 24px; bottom: 88px; z-index: 9; display: flex; flex-direction: column; gap: 8px; }
+  #jump .ib { background: var(--panel); box-shadow: 0 2px 8px rgba(28,28,30,.10); transition: opacity .15s var(--ease), background-color .15s var(--ease), border-color .15s var(--ease); }
+  #jump .ib.off { opacity: 0; pointer-events: none; }
   #dock .in { max-width: 1040px; margin: 0 auto; padding: 12px 24px; display: flex; align-items: center; gap: 12px; }
   .ib { width: 36px; height: 36px; padding: 0; display: inline-grid; place-items: center; border-radius: 8px; }
   .ib svg { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -143,6 +146,7 @@
     #dock .in { flex-wrap: wrap; padding: 8px 16px; }
     #time { min-width: 0; }
     .keys { display: none; }
+    #jump { right: 16px; bottom: 148px; }
   }
   @media (max-width: 560px) { .wrap { padding: 24px 16px 180px; } #dock .sep { display: none; } }
 </style>
@@ -246,6 +250,12 @@
       <button id="clear" class="link danger" type="button" disabled>Hapus hasil</button>
     </div>
   </section>
+</div>
+
+<!-- lompat ke atas / bawah -->
+<div id="jump" class="hidden">
+  <button class="ib off" id="toTop" type="button" title="Ke paling atas" aria-label="Ke paling atas"><svg viewBox="0 0 24 24"><path d="M12 19V5"/><path d="M5 12l7-7 7 7"/></svg></button>
+  <button class="ib off" id="toBottom" type="button" title="Ke paling bawah (hasil terbaru)" aria-label="Ke paling bawah"><svg viewBox="0 0 24 24"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg></button>
 </div>
 
 <!-- bilah audio -->
@@ -635,16 +645,18 @@ self.onmessage = async (ev) => {
   const segText = (s) => s.words.map(w => w.t).join('').trim();
 
   // ---------- WebGPU ----------
-  (async () => {
+  // Tombol Mulai menunggu pemeriksaan ini selesai; kalau tidak, klik yang terlalu cepat
+  // membuat transkrip berjalan di CPU (jauh lebih lambat) padahal GPU tersedia.
+  const gpuReady = (async () => {
     try {
       if (navigator.gpu) {
-        const ad = await navigator.gpu.requestAdapter();
+        const ad = await Promise.race([navigator.gpu.requestAdapter(), new Promise(r => setTimeout(() => r(null), 10000))]);
         if (ad) { gpu.ok = true; gpu.f16 = ad.features.has('shader-f16'); }
       }
     } catch (e) {}
     const n = $('gpuNote');
     if (!gpu.ok) {
-      n.textContent = 'Browser ini belum mendukung akselerasi grafis (WebGPU). Model "Paling teliti" akan otomatis diganti model cadangan yang kurang teliti. Untuk hasil terbaik di Mac, buka halaman ini dengan Google Chrome.';
+      n.textContent = 'Browser ini belum mendukung akselerasi grafis (WebGPU), jadi transkrip berjalan tanpa GPU dan jauh lebih lambat (bisa beberapa kali durasi rekaman). Untuk hasil tercepat di Mac, buka halaman ini dengan Google Chrome.';
       n.classList.remove('hidden');
     } else if (!gpu.f16) {
       n.textContent = 'Kartu grafis komputer ini tidak mendukung mode cepat (fp16). Model "Paling teliti" akan diganti model cadangan yang kurang teliti.';
@@ -913,6 +925,9 @@ self.onmessage = async (ev) => {
   $('start').onclick = async () => {
     if (!file) return;
     if (segs.length && !confirm('Hasil transkrip sebelumnya akan diganti. Lanjut?')) return;
+    $('start').disabled = true;
+    followNew = true;
+    await gpuReady;
     if (!audio16) {          // audio sudah diserahkan ke proses sebelumnya: baca ulang dari file
       $('start').disabled = true;
       try { audio16 = toI16(await decode(file, (r) => { $('fileMeta').textContent = `membaca ulang… ${Math.round(r * 100)}%`; })); }
@@ -988,8 +1003,10 @@ self.onmessage = async (ev) => {
       setStatus(`Mulai mentranskrip ${dur(duration)} audio…`);
     } else if (d.type === 'chunk') {
       const rules = fixRules();
+      const from = segs.length;
       segs.push(...d.segs.map(s => toSeg(s, rules)).filter(s => segText(s)));
-      render(true); save();
+      if (segs.length > from) render(from || 0);
+      save();
       const done = d.upTo / duration, el = (performance.now() - t0) / 1000;
       const eta = done > 0 ? el / done - el : 0;
       setBar(done * 100);
@@ -1000,7 +1017,6 @@ self.onmessage = async (ev) => {
       setBar(100);
       document.title = 'Selesai · Transkrip Audio';
       chime();
-      window.scrollTo({ top: 0, behavior: 'smooth' });
     } else if (d.type === 'error') {
       fail(d.message);
     }
@@ -1110,13 +1126,27 @@ self.onmessage = async (ev) => {
     });
     return set;
   }
-  function render(scroll) {
+  // Ikuti hasil terbaru selama transkripsi, KECUALI pengguna menggulir ke atas sendiri.
+  // Mengikuti menyala lagi begitu pengguna kembali ke paling bawah (atau menekan tombol ke bawah).
+  const nearBottom = () => window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160;
+  let followNew = true, lastY = window.scrollY;
+  window.addEventListener('scroll', () => {
+    const y = window.scrollY;
+    if (y < lastY - 4) followNew = false;          // digulir ke atas
+    if (nearBottom()) followNew = true;
+    lastY = y;
+  }, { passive: true });
+  // from = indeks pertama yang baru: baris lama tidak disentuh, jadi posisi gulir, kursor, dan
+  // kata yang sedang diedit tetap di tempat selama transkripsi berjalan.
+  function render(from = 0) {
     const box = $('segs');
-    box.innerHTML = '';
-    curMark = null;
+    const follow = from > 0 && followNew;
+    if (!from) { box.innerHTML = ''; curMark = null; }
+    else { const empty = box.querySelector('.empty'); if (empty) empty.remove(); }
     if (!segs.length) box.innerHTML = '<div class="empty">Hasil transkrip akan muncul di sini, bagian demi bagian</div>';
     const starts = paraStarts();
     segs.forEach((s, i) => {
+      if (i < from) return;
       const row = document.createElement('div'); row.className = 'seg' + (starts.has(i) ? ' para' : ''); row.dataset.i = i;
       const t = document.createElement('button'); t.className = 't'; t.textContent = fmt(s.start);
       t.title = 'Putar dari sini';
@@ -1131,8 +1161,23 @@ self.onmessage = async (ev) => {
     const has = segs.length > 0;
     $('copy').disabled = $('docx').disabled = $('clear').disabled = !has;
     countMarks(); updateLayout();
-    if (scroll && box.lastChild && !(document.activeElement && document.activeElement.classList.contains('tx'))) box.lastChild.scrollIntoView({ block: 'nearest' });
+    const editing = document.activeElement && document.activeElement.classList.contains('tx');
+    if (follow && !editing && box.lastChild) { box.lastChild.scrollIntoView({ block: 'nearest' }); lastY = window.scrollY; }
+    updateJump();
   }
+
+  // Tombol ke paling atas / paling bawah. Ke bawah juga menyalakan lagi "ikuti hasil terbaru".
+  function updateJump() {
+    const show = segs.length > 0 && !$('work').classList.contains('hidden');
+    $('jump').classList.toggle('hidden', !show);
+    if (!show) return;
+    $('toTop').classList.toggle('off', window.scrollY < 300);
+    $('toBottom').classList.toggle('off', nearBottom());
+  }
+  $('toTop').onclick = () => window.scrollTo({ top: 0, behavior: 'smooth' });
+  $('toBottom').onclick = () => { followNew = true; window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' }); };
+  window.addEventListener('scroll', updateJump, { passive: true });
+  window.addEventListener('resize', updateJump);
   function countMarks() {
     const c = { low: 0, fix: 0, unc: 0 };
     segs.forEach(s => s.words.forEach(w => { if (w.k in c) c[w.k]++; }));
