@@ -1,0 +1,511 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transkrip Audio</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --ink: #1d1d1f; --muted: #6b6b70;
+    --line: #e3e1dc; --accent: #1f4e79; --accent-ink: #ffffff; --soft: #eef3f8;
+    --warn: #8a5a00; --warn-bg: #fff6e0; --err: #a4262c; --ok: #1e6b3a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 28px 16px 80px; }
+  h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+  .step { font-size: 13px; font-weight: 600; color: var(--accent); margin-bottom: 10px; }
+  #drop { border: 2px dashed var(--line); border-radius: 10px; padding: 28px 16px; text-align: center; cursor: pointer; transition: .15s; }
+  #drop:hover, #drop.over { border-color: var(--accent); background: var(--soft); }
+  #drop strong { display: block; font-size: 16px; margin-bottom: 4px; }
+  #drop span { color: var(--muted); font-size: 13px; }
+  #fileInfo { margin-top: 12px; font-size: 14px; }
+  .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); flex: 1 1 220px; }
+  select { font: inherit; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
+  button { font: inherit; border: 1px solid var(--line); background: #fff; color: var(--ink); padding: 9px 16px; border-radius: 8px; cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.primary:hover:not(:disabled) { filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
+  .notice { font-size: 13px; background: var(--warn-bg); color: var(--warn); border-radius: 8px; padding: 10px 12px; margin-top: 12px; }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 10px 0 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  #status { font-size: 14px; }
+  #status.err { color: var(--err); }
+  #status.ok { color: var(--ok); }
+  audio { width: 100%; margin: 4px 0 12px; }
+  .tools { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .tools .spacer { flex: 1; }
+  .chk { font-size: 14px; display: flex; gap: 6px; align-items: center; }
+  #segs { border-top: 1px solid var(--line); }
+  .seg { display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .seg button.t { flex: none; padding: 2px 8px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--accent); background: var(--soft); border-color: transparent; height: fit-content; }
+  .seg .tx { flex: 1; outline: none; padding: 2px 4px; border-radius: 4px; font-family: "Times New Roman", Georgia, serif; font-size: 16px; }
+  .seg .tx:focus { background: #fffbe8; }
+  .seg.playing .tx { background: var(--soft); }
+  .empty { color: var(--muted); padding: 16px 0; text-align: center; }
+  .hidden { display: none !important; }
+  @media (max-width: 560px) { .seg { flex-direction: column; gap: 4px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Transkrip Audio</h1>
+  <p class="sub">Ubah rekaman suara jadi teks kata per kata, lalu simpan ke Word. Audio diproses di komputer ini dan tidak diunggah ke server mana pun.</p>
+
+  <div class="card">
+    <div class="step">1 · Pilih rekaman</div>
+    <div id="drop" tabindex="0">
+      <strong>Klik untuk pilih file, atau tarik file ke sini</strong>
+      <span>MP3, M4A, WAV, AAC, OGG, atau video MP4/MOV</span>
+    </div>
+    <input id="file" type="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.ogg,.opus,.flac,.mp4,.mov" class="hidden">
+    <div id="fileInfo" class="hidden"></div>
+  </div>
+
+  <div class="card">
+    <div class="step">2 · Atur lalu mulai</div>
+    <div class="row">
+      <label class="f">Bahasa dalam rekaman
+        <select id="lang">
+          <option value="indonesian" selected>Bahasa Indonesia</option>
+          <option value="english">English</option>
+          <option value="">Deteksi otomatis</option>
+        </select>
+      </label>
+      <label class="f">Ketelitian
+        <select id="model">
+          <option value="onnx-community/whisper-large-v3-turbo">Paling teliti (disarankan, unduh ±1,5 GB sekali)</option>
+          <option value="onnx-community/whisper-small">Sedang (unduh ±1 GB, lebih cepat)</option>
+          <option value="onnx-community/whisper-base">Cepat, kurang teliti (unduh ±300 MB)</option>
+        </select>
+      </label>
+      <div style="display:flex; gap:8px">
+        <button id="start" class="primary" disabled>Mulai transkrip</button>
+        <button id="stop" class="hidden">Berhenti</button>
+      </div>
+    </div>
+    <div id="gpuNote" class="notice hidden"></div>
+    <div id="progressBox" class="hidden">
+      <div class="bar"><div id="bar"></div></div>
+      <div id="status"></div>
+    </div>
+    <p class="note">Pemakaian pertama perlu internet untuk mengunduh model. Setelah itu tersimpan di browser. Selama proses, jangan tutup tab ini dan jangan biarkan Mac tidur.</p>
+  </div>
+
+  <div class="card">
+    <div class="step">3 · Periksa, perbaiki, lalu simpan</div>
+    <audio id="player" controls class="hidden"></audio>
+    <div class="tools">
+      <label class="chk"><input type="checkbox" id="withTime"> Sertakan penanda waktu</label>
+      <span class="spacer"></span>
+      <button id="copy" disabled>Salin teks</button>
+      <button id="docx" class="primary" disabled>Unduh Word (.docx)</button>
+      <button id="clear" disabled>Hapus</button>
+    </div>
+    <p class="note" style="margin-top:0">Klik jam di kiri untuk memutar audio dari bagian itu. Klik teks untuk mengetik perbaikan langsung.</p>
+    <div id="segs"><div class="empty">Hasil transkrip akan muncul di sini, bagian demi bagian.</div></div>
+    <div class="notice">Hasil dari AI bisa keliru, terutama nama orang, istilah hukum, angka, dan bagian yang tidak jelas. Selalu dengarkan ulang sebelum dipakai sebagai dokumen resmi.</div>
+  </div>
+</div>
+
+<script id="worker-src" type="text/plain">
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.1';
+env.allowLocalModels = false;
+
+const SR = 16000;
+let asr = null, loadedKey = '';
+
+function rms(a, s, e) {
+  let sum = 0; const n = Math.max(1, e - s);
+  for (let i = s; i < e; i++) sum += a[i] * a[i];
+  return Math.sqrt(sum / n);
+}
+// Potong audio di titik paling sunyi agar kata tidak terpotong di tengah.
+function splitPoints(a) {
+  const pts = [0], minLen = 18 * SR, maxLen = 28 * SR, frame = Math.round(0.1 * SR);
+  let start = 0;
+  while (a.length - start > maxLen) {
+    let best = start + maxLen, bestE = Infinity;
+    for (let p = start + minLen; p + frame <= start + maxLen; p += frame / 2) {
+      const e = rms(a, p, p + frame);
+      if (e < bestE) { bestE = e; best = p + frame / 2; }
+    }
+    best = Math.round(best);
+    pts.push(best); start = best;
+  }
+  pts.push(a.length);
+  return pts;
+}
+
+// Urutan cara menjalankan model. GPU dicoba dulu (cepat); kalau hasilnya rusak, pindah ke CPU (q8, terbukti benar).
+const SMALL = 'onnx-community/whisper-small';
+function configs(model, gpu, f16) {
+  const list = [];
+  const big = /large|turbo|medium/.test(model);
+  const g32 = (m) => ({ model: m, device: 'webgpu', dtype: { encoder_model: 'fp32', decoder_model_merged: 'fp32' } });
+  if (gpu) {
+    if (big) {
+      if (f16) list.push({ model, device: 'webgpu', dtype: { encoder_model: 'fp16', decoder_model_merged: 'fp16' } });
+      list.push(g32(SMALL)); // model besar fp32 terlalu berat untuk browser
+    } else list.push(g32(model));
+  }
+  list.push({ model: big && gpu ? SMALL : model, device: 'wasm', dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' } });
+  return list;
+}
+// Deteksi hasil rusak: kata yang sama berulang terus, atau banyak huruf non-Latin.
+function looksBroken(text, latinLang) {
+  if (latinLang && (text.match(/[\p{Script=Hangul}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Arabic}\p{Script=Cyrillic}\p{Script=Thai}�]/gu) || []).length >= 3) return true;
+  const words = text.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length >= 20 && new Set(words).size / words.length < 0.25) return true;
+  // rangkaian 4 kata yang sama muncul 5 kali atau lebih dalam satu potongan 30 detik
+  const seen = new Map();
+  for (let i = 0; i + 4 <= words.length; i++) {
+    const k = words.slice(i, i + 4).join(' ');
+    const c = (seen.get(k) || 0) + 1; seen.set(k, c);
+    if (c >= 5) return true;
+  }
+  const letters = text.replace(/[\s\d\p{P}\p{S}]/gu, '');
+  if (letters.length >= 20) {
+    const odd = letters.replace(/[\p{Script=Latin}]/gu, '').length + (text.match(/�/g) || []).length;
+    if (odd / letters.length > 0.12) return true;
+  }
+  return false;
+}
+async function load(cfg) {
+  const key = JSON.stringify(cfg);
+  if (asr && loadedKey === key) return;
+  if (asr) { try { await asr.dispose(); } catch (e) {} asr = null; }
+  self.postMessage({ type: 'loading', device: cfg.device });
+  asr = await pipeline('automatic-speech-recognition', cfg.model, {
+    device: cfg.device, dtype: cfg.dtype,
+    progress_callback: (p) => self.postMessage({ type: 'load', p })
+  });
+  loadedKey = key;
+}
+
+self.onmessage = async (ev) => {
+  const { audio, model, gpu, f16, language } = ev.data;
+  try {
+    const cfgs = configs(model, gpu, f16);
+    let ci = 0;
+    while (true) {
+      try { await load(cfgs[ci]); break; }
+      catch (e) { if (ci + 1 >= cfgs.length) throw e; ci++; }
+    }
+    const pts = splitPoints(audio);
+    const total = pts.length - 1;
+    self.postMessage({ type: 'begin', total });
+    for (let i = 0; i < total; i++) {
+      const s = pts[i], e = pts[i + 1];
+      const piece = audio.subarray(s, e);
+      const offset = s / SR, end = e / SR;
+      let segs = [];
+      if (rms(piece, 0, piece.length) > 0.002) {
+        const opts = { task: 'transcribe', return_timestamps: true };
+        if (language) opts.language = language;
+        let out = await asr(piece, opts);
+        while (looksBroken(out.text || '', !!language) && ci + 1 < cfgs.length) {
+          ci++;
+          self.postMessage({ type: 'fallback' });
+          await load(cfgs[ci]);
+          out = await asr(piece, opts);
+        }
+        const chunks = (out.chunks && out.chunks.length) ? out.chunks : [{ timestamp: [0, null], text: out.text }];
+        segs = chunks.map(c => ({
+          start: offset + (c.timestamp[0] ?? 0),
+          end: c.timestamp[1] == null ? end : Math.min(end, offset + c.timestamp[1]),
+          text: (c.text || '').trim()
+        })).filter(x => x.text);
+      }
+      self.postMessage({ type: 'chunk', index: i, total, segs, upTo: end });
+    }
+    self.postMessage({ type: 'done' });
+  } catch (err) {
+    self.postMessage({ type: 'error', message: String((err && err.message) || err) });
+  }
+};
+</script>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const SR = 16000;
+  const STORE = 'transkrip-audio-v1';
+  let file = null, audio16 = null, duration = 0, worker = null;
+  let segs = [];            // {start, end, text}
+  let running = false, t0 = 0;
+  let gpu = { ok: false, f16: false };
+
+  // ---------- util ----------
+  const fmt = (s) => {
+    s = Math.max(0, Math.floor(s));
+    const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+    return [h, m, x].map(v => String(v).padStart(2, '0')).join(':');
+  };
+  const dur = (s) => {
+    s = Math.round(s);
+    if (s < 60) return s + ' detik';
+    const h = Math.floor(s / 3600), m = Math.round(s % 3600 / 60);
+    return h ? `${h} jam ${m} menit` : `${m} menit`;
+  };
+  function setStatus(msg, cls = '') { $('status').textContent = msg; $('status').className = cls; }
+  function setBar(p) { $('bar').style.width = Math.max(0, Math.min(100, p)) + '%'; }
+
+  // ---------- WebGPU ----------
+  (async () => {
+    try {
+      if (navigator.gpu) {
+        const ad = await navigator.gpu.requestAdapter();
+        if (ad) { gpu.ok = true; gpu.f16 = ad.features.has('shader-f16'); }
+      }
+    } catch (e) {}
+    if (!gpu.ok) {
+      $('model').value = 'onnx-community/whisper-small';
+      const n = $('gpuNote');
+      n.textContent = 'Browser ini belum mendukung akselerasi grafis (WebGPU), jadi proses akan lebih lambat. Untuk hasil tercepat di Mac, buka file ini dengan Google Chrome.';
+      n.classList.remove('hidden');
+    }
+  })();
+
+  // ---------- pilih file ----------
+  const drop = $('drop');
+  drop.onclick = () => $('file').click();
+  drop.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') $('file').click(); };
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+  drop.ondragleave = () => drop.classList.remove('over');
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('over'); if (e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]); };
+  $('file').onchange = (e) => { if (e.target.files[0]) pick(e.target.files[0]); };
+
+  async function pick(f) {
+    if (running) return;
+    file = f; audio16 = null;
+    const info = $('fileInfo');
+    info.classList.remove('hidden');
+    info.textContent = `Membaca ${f.name} …`;
+    $('start').disabled = true;
+    $('player').src = URL.createObjectURL(f);
+    $('player').classList.remove('hidden');
+    try {
+      audio16 = await decode(f);
+      duration = audio16.length / SR;
+      info.innerHTML = '';
+      const b = document.createElement('strong'); b.textContent = f.name;
+      info.append(b, document.createTextNode(` · durasi ${dur(duration)}`));
+      $('start').disabled = false;
+    } catch (e) {
+      info.textContent = `File ini tidak bisa dibaca browser (${e.message || e}). Coba ubah ke MP3 atau WAV dulu.`;
+    }
+  }
+
+  async function decode(f) {
+    const buf = await f.arrayBuffer();
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const ctx = new AC();
+    let decoded;
+    try { decoded = await ctx.decodeAudioData(buf); } finally { ctx.close && ctx.close(); }
+    // Coba resample bawaan browser (lebih bersih), kalau gagal pakai cara manual.
+    try {
+      const len = Math.ceil(decoded.duration * SR);
+      const off = new OfflineAudioContext(1, len, SR);
+      const src = off.createBufferSource();
+      src.buffer = decoded; src.connect(off.destination); src.start();
+      const r = await off.startRendering();
+      return r.getChannelData(0).slice();
+    } catch (e) {
+      const ch = decoded.numberOfChannels, n = decoded.length;
+      const mono = new Float32Array(n);
+      for (let c = 0; c < ch; c++) { const d = decoded.getChannelData(c); for (let i = 0; i < n; i++) mono[i] += d[i] / ch; }
+      const ratio = decoded.sampleRate / SR, outLen = Math.floor(n / ratio), out = new Float32Array(outLen);
+      for (let i = 0; i < outLen; i++) {
+        const x = i * ratio, j = Math.floor(x), fr = x - j;
+        out[i] = mono[j] * (1 - fr) + (mono[j + 1] ?? mono[j]) * fr;
+      }
+      return out;
+    }
+  }
+
+  // ---------- jalankan ----------
+  function makeWorker() {
+    const src = document.getElementById('worker-src').textContent;
+    const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+    return new Worker(url, { type: 'module' });
+  }
+
+  $('start').onclick = () => {
+    if (!audio16) return;
+    if (segs.length && !confirm('Hasil transkrip sebelumnya akan diganti. Lanjut?')) return;
+    segs = []; render(); save();
+    running = true;
+    $('start').disabled = true; $('stop').classList.remove('hidden');
+    $('progressBox').classList.remove('hidden');
+    setBar(0); setStatus('Menyiapkan model…');
+    if (!worker) { worker = makeWorker(); worker.onmessage = onMsg; worker.onerror = (e) => fail(e.message || 'Worker gagal dimuat'); }
+    const files = {};
+    worker._files = files;
+    const copy = audio16.slice();
+    worker.postMessage({
+      audio: copy, model: $('model').value,
+      gpu: gpu.ok, f16: gpu.f16,
+      language: $('lang').value || null
+    }, [copy.buffer]);
+  };
+
+  $('stop').onclick = () => {
+    if (worker) { worker.terminate(); worker = null; }
+    finish(`Dihentikan. ${segs.length ? 'Bagian yang sudah selesai tetap tersimpan di bawah.' : ''}`);
+  };
+
+  function onMsg(ev) {
+    const d = ev.data;
+    if (d.type === 'load') {
+      const p = d.p, files = worker._files;
+      if (p.status === 'progress' && p.total) {
+        files[p.file] = { loaded: p.loaded, total: p.total };
+        let L = 0, T = 0; for (const k in files) { L += files[k].loaded; T += files[k].total; }
+        setBar(L / T * 100);
+        setStatus(`Mengunduh model (sekali saja): ${(L / 1e6).toFixed(0)} / ${(T / 1e6).toFixed(0)} MB`);
+      } else if (p.status === 'ready') {
+        setStatus('Memuat model ke memori…');
+      }
+    } else if (d.type === 'loading') {
+      worker._files = {};
+      setStatus(d.device === 'webgpu' ? 'Menyiapkan model (mode GPU)…' : 'Menyiapkan model…');
+    } else if (d.type === 'fallback') {
+      setStatus('Mode GPU memberi hasil tidak wajar di komputer ini, pindah ke mode biasa (lebih lambat tapi akurat)…');
+    } else if (d.type === 'begin') {
+      t0 = performance.now(); setBar(0);
+      setStatus(`Mulai mentranskrip ${dur(duration)} audio…`);
+    } else if (d.type === 'chunk') {
+      segs.push(...d.segs); render(true); save();
+      const done = d.upTo / duration, el = (performance.now() - t0) / 1000;
+      const eta = done > 0 ? el / done - el : 0;
+      setBar(done * 100);
+      setStatus(`Sudah sampai ${fmt(d.upTo)} dari ${fmt(duration)} · perkiraan sisa ${dur(eta)}`);
+    } else if (d.type === 'done') {
+      finish(`Selesai dalam ${dur((performance.now() - t0) / 1000)}. Periksa hasilnya lalu klik "Unduh Word".`, 'ok');
+      setBar(100);
+    } else if (d.type === 'error') {
+      fail(d.message);
+    }
+  }
+  function fail(msg) {
+    if (worker) { worker.terminate(); worker = null; }
+    let hint = '';
+    if (/fetch|network|Failed to load/i.test(msg)) hint = ' Pastikan internet tersambung untuk unduhan pertama.';
+    else if (/memory|allocation|OrtRun|buffer/i.test(msg)) hint = ' Kemungkinan memori tidak cukup. Coba pilih ketelitian "Sedang".';
+    finish('Gagal: ' + msg + hint, 'err');
+  }
+  function finish(msg, cls = '') {
+    running = false;
+    $('start').disabled = !audio16; $('stop').classList.add('hidden');
+    setStatus(msg, cls);
+  }
+
+  // ---------- tampilan hasil ----------
+  function render(scroll) {
+    const box = $('segs');
+    box.innerHTML = '';
+    if (!segs.length) {
+      box.innerHTML = '<div class="empty">Hasil transkrip akan muncul di sini, bagian demi bagian.</div>';
+    }
+    segs.forEach((s, i) => {
+      const row = document.createElement('div'); row.className = 'seg'; row.dataset.i = i;
+      const t = document.createElement('button'); t.className = 't'; t.textContent = fmt(s.start);
+      t.title = 'Putar dari sini';
+      t.onclick = () => { const p = $('player'); if (p.src) { p.currentTime = s.start; p.play(); } };
+      const tx = document.createElement('div'); tx.className = 'tx'; tx.contentEditable = 'true'; tx.spellcheck = true;
+      tx.textContent = s.text;
+      tx.oninput = () => { segs[i].text = tx.textContent; save(); };
+      row.append(t, tx); box.append(row);
+    });
+    const has = segs.length > 0;
+    $('copy').disabled = $('docx').disabled = $('clear').disabled = !has;
+    if (scroll && box.lastChild && !document.activeElement.classList.contains('tx')) box.lastChild.scrollIntoView({ block: 'nearest' });
+  }
+
+  // sorot bagian yang sedang diputar
+  $('player').ontimeupdate = () => {
+    const ct = $('player').currentTime;
+    document.querySelectorAll('.seg').forEach(r => {
+      const s = segs[r.dataset.i];
+      r.classList.toggle('playing', !!s && ct >= s.start && ct < s.end);
+    });
+  };
+
+  // Teks akhir: dengan waktu = satu baris per bagian; tanpa waktu = paragraf (pisah jika jeda > 2 detik).
+  function paragraphs() {
+    const withTime = $('withTime').checked;
+    const list = segs.map(s => ({ ...s, text: s.text.trim() })).filter(s => s.text);
+    if (withTime) return list.map(s => `[${fmt(s.start)}] ${s.text}`);
+    const out = []; let cur = '', prevEnd = null;
+    for (const s of list) {
+      if (cur && prevEnd != null && s.start - prevEnd > 2) { out.push(cur); cur = ''; }
+      cur = cur ? cur + ' ' + s.text : s.text; prevEnd = s.end;
+    }
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  $('copy').onclick = async () => {
+    const text = paragraphs().join('\n\n');
+    try { await navigator.clipboard.writeText(text); }
+    catch (e) {
+      const ta = document.createElement('textarea'); ta.value = text; document.body.append(ta); ta.select(); document.execCommand('copy'); ta.remove();
+    }
+    flash($('copy'), 'Tersalin ✓');
+  };
+  function flash(btn, msg) { const o = btn.textContent; btn.textContent = msg; setTimeout(() => btn.textContent = o, 1500); }
+
+  $('clear').onclick = () => {
+    if (!confirm('Hapus semua hasil transkrip di layar ini?')) return;
+    segs = []; render(); save();
+  };
+
+  // ---------- Word (.docx) ----------
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
+  const run = (t, bold) => `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>${bold ? '<w:b/>' : ''}<w:sz w:val="24"/></w:rPr><w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+  const para = (t, bold, after = 200) => `<w:p><w:pPr><w:spacing w:after="${after}" w:line="360" w:lineRule="auto"/><w:jc w:val="both"/></w:pPr>${run(t, bold)}</w:p>`;
+
+  $('docx').onclick = async () => {
+    const name = (file && file.name) || (load()?.name) || 'rekaman';
+    const today = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
+    let body = para('TRANSKRIP REKAMAN', true, 120);
+    body += para(`Sumber: ${name}`, false, 0);
+    body += para(`Tanggal transkrip: ${today}`, false, 240);
+    for (const p of paragraphs()) body += para(p, false);
+    body += '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>';
+    const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`;
+    const zip = new JSZip();
+    zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+    zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+    zip.file('word/document.xml', doc);
+    const blob = await zip.generateAsync({ type: 'blob', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'Transkrip - ' + name.replace(/\.[^.]+$/, '') + '.docx';
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  };
+
+  // ---------- simpan otomatis (hanya di browser ini) ----------
+  function save() { try { localStorage.setItem(STORE, JSON.stringify({ name: file && file.name, segs })); } catch (e) {} }
+  function load() { try { return JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (e) { return null; } }
+  const prev = load();
+  if (prev && prev.segs && prev.segs.length) {
+    segs = prev.segs; render();
+    $('progressBox').classList.remove('hidden');
+    setStatus(`Hasil terakhir (${prev.name || 'rekaman'}) dipulihkan dari sesi sebelumnya.`);
+  }
+  $('withTime').onchange = () => {};
+  window.addEventListener('beforeunload', (e) => { if (running) { e.preventDefault(); e.returnValue = ''; } });
+})();
+</script>
+</body>
+</html>
