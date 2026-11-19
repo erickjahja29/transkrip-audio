@@ -1304,43 +1304,52 @@ self.onmessage = async (ev) => {
   };
 
   // ---------- Word (.docx) ----------
+  // Susunan sama dengan file Word pertama ("Transkrip Rekaman Sidang"), seluruhnya Times New Roman.
   const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '');
-  // style: { b, i, color, hl }
-  const run = (t, st = {}) => `<w:r><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>${st.b ? '<w:b/>' : ''}${st.i ? '<w:i/>' : ''}${st.color ? `<w:color w:val="${st.color}"/>` : ''}<w:sz w:val="24"/>${st.hl ? `<w:highlight w:val="${st.hl}"/>` : ''}</w:rPr><w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
-  const para = (runs, { after = 200, jc = 'both', ind = 0 } = {}) => `<w:p><w:pPr><w:spacing w:after="${after}" w:line="360" w:lineRule="auto"/>${ind ? `<w:ind w:left="${ind}" w:hanging="240"/>` : ''}<w:jc w:val="${jc}"/></w:pPr>${runs}</w:p>`;
+  const FONT = '<w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:eastAsia="Times New Roman"/>';
+  // st: { b, i, color, hl, sz }   (sz dalam setengah poin; isi 11 pt = 22)
+  const run = (t, st = {}) => `<w:r><w:rPr>${FONT}${st.b ? '<w:b/>' : ''}${st.i ? '<w:i/>' : ''}${st.color ? `<w:color w:val="${st.color}"/>` : ''}${st.extra || ''}<w:sz w:val="${st.sz || 22}"/><w:szCs w:val="${st.sz || 22}"/>${st.hl ? `<w:highlight w:val="${st.hl}"/>` : ''}</w:rPr><w:t xml:space="preserve">${esc(t)}</w:t></w:r>`;
+  const BR = '<w:r><w:br/></w:r>';
+  const para = (runs, pPr = '') => `<w:p><w:pPr>${pPr || '<w:spacing w:after="200" w:line="276" w:lineRule="auto"/>'}</w:pPr>${runs}</w:p>`;
+  const bullet = (runs, after) => para(run('•') + '<w:r><w:tab/></w:r>' + runs,
+    `<w:tabs><w:tab w:val="left" w:pos="720"/></w:tabs><w:spacing w:after="${after}" w:line="276" w:lineRule="auto"/><w:ind w:left="720" w:hanging="360"/>`);
   const STYLE = { low: { hl: 'yellow' }, fix: { hl: 'green' }, unc: { i: true, color: 'C00000' }, n: {} };
 
   $('docx').onclick = async () => {
-    const name = (file && file.name) || (load()?.name) || 'rekaman';
+    const name = (file && file.name) || 'rekaman';
     const withTime = $('withTime').checked, marks = $('withMarks').checked;
-    const today = new Date().toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' });
     const ps = paragraphs();
     const last = segs.length ? segs[segs.length - 1].end : 0;
     const langTxt = { indonesian: 'Indonesia', english: 'Inggris', '': 'deteksi otomatis' }[$('lang').value] ?? '';
-    const mdl = modelName(modelUsed || load()?.model || $('model').value);
+    const mdl = modelName(modelUsed || $('model').value).replace(/^whisper-/, '');
 
-    let body = para(run('TRANSKRIP REKAMAN', { b: true }), { after: 120, jc: 'left' });
-    body += para(run(`Sumber: ${name}`), { after: 0, jc: 'left' });
-    if (duration || last) body += para(run(`Durasi: ${fmt(duration || last)}`), { after: 0, jc: 'left' });
-    body += para(run(`Bahasa: ${langTxt}`), { after: 0, jc: 'left' });
-    body += para(run(`Tanggal transkrip: ${today}`), { after: 0, jc: 'left' });
-    body += para(run(`Metode: transkripsi otomatis (AI Whisper ${mdl}), kata per kata`), { after: marks ? 120 : 240, jc: 'left' });
+    // Judul: 26 pt, biru tua, garis bawah biru (seperti gaya "Title" Word)
+    let body = para(run('Transkrip Rekaman Sidang', { sz: 52, color: '17365D', extra: '<w:spacing w:val="5"/><w:kern w:val="28"/>' }),
+      '<w:pBdr><w:bottom w:val="single" w:sz="8" w:space="4" w:color="4F81BD"/></w:pBdr><w:spacing w:after="300" w:line="240" w:lineRule="auto"/>');
+    body += para([
+      run(`File: ${name}`), BR,
+      run(`Durasi: ${fmt(duration || last)}`), BR,
+      run(`Bahasa: ${langTxt}`), BR,
+      run(`Metode: transkripsi otomatis (Whisper ${mdl}), verbatim, belum diverifikasi manusia`)
+    ].join(''));
     if (marks) {
-      body += para(run('Keterangan tanda:', { b: true }), { after: 0, jc: 'left' });
-      body += para(run('•  ') + run('contoh', STYLE.low) + run(' = AI kurang yakin, kemungkinan salah dengar. Dengarkan ulang rekaman di penanda waktu paragrafnya.'), { after: 0, jc: 'left', ind: 240 });
-      body += para(run('•  ') + run('contoh', STYLE.fix) + run(' = istilah yang dikoreksi otomatis (mis. "kuah pelama" menjadi "KUHAP lama"). Mohon dicek.'), { after: 0, jc: 'left', ind: 240 });
-      body += para(run('•  ') + run('[tidak jelas]', STYLE.unc) + run(' = suara tidak terbaca atau kemungkinan teks palsu dari AI.'), { after: 240, jc: 'left', ind: 240 });
+      body += para(run('Keterangan warna:', { b: true }));
+      body += bullet(run('contoh', STYLE.low) + run(' = keyakinan rendah, kemungkinan salah dengar. Cek dengan mendengarkan ulang di timestamp paragrafnya.'), 0);
+      body += bullet(run('contoh', STYLE.fix) + run(' = istilah yang dikoreksi dari hasil mesin (mis. “kuah pelama” → “KUHAP lama”, “Ali” → “Ahli”). Mohon dicek.'), 0);
+      body += bullet(run('[tidak jelas]', STYLE.unc) + run(' = suara tidak terbaca / kemungkinan teks palsu dari mesin, dihapus.'), 200);
     }
+    body += para(run('Catatan: label pembicara (Hakim/Pemohon/Termohon/Ahli) tidak dibuat otomatis; paragraf baru dimulai setiap ada jeda bicara.'));
+    body += para('');
     for (const p of ps) {
-      let runs = withTime ? run(`[${fmt(p.start)}]  `, { b: true, color: '595959' }) : '';
-      // gabungkan kata berurutan dengan tanda yang sama
+      let runs = withTime ? run(`[${fmt(p.start)}]  `, { b: true, color: '555555' }) : '';
+      // gabungkan kata berurutan dengan tanda yang sama; spasi sebelum kata tidak ikut distabilo
       let buf = '', k = null;
       const flush = () => { if (buf) runs += run(buf, marks ? STYLE[k] || {} : {}); buf = ''; };
       for (const w of p.words) {
         const kk = marks ? w.k : 'n';
         let t = w.t;
         if (kk !== k) {
-          const lead = kk !== 'n' ? (t.match(/^\s+/) || [''])[0] : '';   // spasi tetap tanpa stabilo
+          const lead = kk !== 'n' ? (t.match(/^\s+/) || [''])[0] : '';
           buf += lead; t = t.slice(lead.length);
           flush(); k = kk;
         }
@@ -1349,7 +1358,7 @@ self.onmessage = async (ev) => {
       flush();
       body += para(runs);
     }
-    body += '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr>';
+    body += '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="720" w:footer="720" w:gutter="0"/><w:cols w:space="720"/></w:sectPr>';
     const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${body}</w:body></w:document>`;
     const zip = new JSZip();
     zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
@@ -1359,26 +1368,23 @@ self.onmessage = async (ev) => {
     window.__lastDocx = blob; // untuk pengujian
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'Transkrip - ' + name.replace(/\.[^.]+$/, '') + '.docx';
+    a.download = name.replace(/\.[^.]+$/, '').replace(/\.(mp3|m4a|wav|aac|ogg)$/i, '') + ' - Transkrip.docx';
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    unsaved = false;
   };
 
-  // ---------- simpan otomatis (hanya di browser ini) ----------
-  function save() { try { localStorage.setItem(STORE, JSON.stringify({ v: 2, name: file && file.name, model: modelUsed, duration, segs })); } catch (e) {} }
-  function load() { try { return JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (e) { return null; } }
+  // ---------- setiap buka halaman mulai kosong ----------
+  // Hasil transkrip TIDAK disimpan di browser: setiap kali link dibuka, halaman bersih.
+  // Supaya hasil tidak hilang tanpa sengaja, browser bertanya dulu kalau halaman ditutup/di-refresh
+  // saat transkrip sedang berjalan atau hasilnya belum diunduh ke Word.
+  let unsaved = false;
+  function save() { unsaved = segs.length > 0; }
+  function load() { return null; }
+  try { localStorage.removeItem(STORE); } catch (e) {}   // buang hasil lama dari versi sebelumnya
   loadTerms();
-  const prev = load();
-  if (prev && prev.segs && prev.segs.length) {
-    // format lama: {start, end, text}
-    segs = prev.segs.map(s => s.words ? s : { start: s.start, end: s.end, words: [{ t: s.text || '', k: 'n' }] });
-    modelUsed = prev.model || ''; duration = prev.duration || 0;
-    render();
-    $('progressBox').classList.remove('hidden');
-    setStatus(`Hasil terakhir (${prev.name || 'rekaman'}) dipulihkan dari sesi sebelumnya`);
-  }
   updateLayout();
-  window.addEventListener('beforeunload', (e) => { if (running) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', (e) => { if (running || unsaved) { e.preventDefault(); e.returnValue = ''; } });
 })();
 </script>
 </body>
